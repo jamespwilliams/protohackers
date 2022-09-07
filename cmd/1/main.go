@@ -26,32 +26,34 @@ type Resp struct {
 }
 
 func main() {
-	panic(protohackers.HandleLines(
+	panic(protohackers.ListenAndAcceptParallel(
 		"tcp",
 		":10000",
-		func(bytes []byte) (*[]byte, error) {
-			var req Req
-			if err := json.Unmarshal(bytes, &req); err != nil || req.Number == nil || req.Method != "isPrime" {
-				result := []byte("invalid")
+		protohackers.LineConnHandler(
+			func(bytes []byte) (*[]byte, error) {
+				var req Req
+				if err := json.Unmarshal(bytes, &req); err != nil || req.Number == nil || req.Method != "isPrime" {
+					result := []byte("invalid")
+					return &result, nil
+				}
+
+				isWholeNumber := *req.Number == float64(int(*req.Number))
+
+				// Note the use of req.BigNumber here: some numbers sent by the checker are
+				// marked "big" with the bignumber flag: they are indeed big and would take
+				// a while to do primality tests on. Helpfully, the bignumber flag is set on
+				// them, and they're all non-prime, so we can just mark them all as
+				// non-prime without bothering to do a primality test.
+				isPrime := !req.BigNumber && isWholeNumber && isPrime(int(*req.Number))
+
+				result, err := json.Marshal(Resp{Method: "isPrime", Prime: isPrime})
+				if err != nil {
+					return nil, fmt.Errorf("prime time: failed to marshal response: %w", err)
+				}
+
 				return &result, nil
-			}
-
-			isWholeNumber := *req.Number == float64(int(*req.Number))
-
-			// Note the use of req.BigNumber here: some numbers sent by the checker are
-			// marked "big" with the bignumber flag: they are indeed big and would take
-			// a while to do primality tests on. Helpfully, the bignumber flag is set on
-			// them, and they're all non-prime, so we can just mark them all as
-			// non-prime without bothering to do a primality test.
-			isPrime := !req.BigNumber && isWholeNumber && isPrime(int(*req.Number))
-
-			result, err := json.Marshal(Resp{Method: "isPrime", Prime: isPrime})
-			if err != nil {
-				return nil, fmt.Errorf("prime time: failed to marshal response: %w", err)
-			}
-
-			return &result, nil
-		},
+			},
+		),
 	))
 }
 
