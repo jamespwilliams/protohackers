@@ -36,7 +36,7 @@ func ListenAndAcceptParallel(network, address string, handler ConnectionHandler)
 
 type RequestHandler func(request []byte) (response *[]byte, err error)
 
-// HandleLineByLine listens on the given network and address, and then, for each connection it
+// HandleLines listens on the given network and address, and then, for each connection it
 // receives, it will continually:
 //
 //   - read a line of bytes (a sequence of bytes ending in a newline character)
@@ -45,7 +45,7 @@ type RequestHandler func(request []byte) (response *[]byte, err error)
 //     followed by a newline (otherwise do nothing).
 //
 // Lines passed to the handler do not contain newlines.
-func HandleLineByLine(network, address string, handler RequestHandler) error {
+func HandleLines(network, address string, handler RequestHandler) error {
 	return ListenAndAcceptParallel(network, address, func(conn net.Conn) error {
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {

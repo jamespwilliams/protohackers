@@ -26,7 +26,7 @@ type Resp struct {
 }
 
 func main() {
-	panic(protohackers.HandleLineByLine(
+	panic(protohackers.HandleLines(
 		"tcp",
 		":10000",
 		func(bytes []byte) (*[]byte, error) {
