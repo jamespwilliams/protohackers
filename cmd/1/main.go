@@ -26,7 +26,7 @@ type Resp struct {
 }
 
 func main() {
-	panic(protohackers.ListenAndAcceptParallel(
+	panic(protohackers.ListenAcceptAndHandleParallel(
 		"tcp",
 		":10000",
 		protohackers.LineConnHandler(

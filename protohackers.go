@@ -11,15 +11,22 @@ import (
 
 type ConnHandler func(net.Conn) error
 
-// ListenAndAcceptParallel listens on the given network and address, and accepts an unlimited amount
-// of connections in parallel by calling the given handler in a goroutine for each connection.
-func ListenAndAcceptParallel(network, address string, handler ConnHandler) error {
+// ListenAcceptAndHandleParallel is a utility wrapper around
+// AcceptAndHandleParallel which calls net.Listen to get the net.Listener
+func ListenAcceptAndHandleParallel(network, address string, handler ConnHandler) error {
 	listener, err := net.Listen(network, address)
 	if err != nil {
 		return fmt.Errorf("protohackers: failed to listen on network %s and address %s: %w",
 			network, address, err)
 	}
 
+	return AcceptAndHandleParallel(listener, handler)
+}
+
+// AcceptAndHandleParallel accepts an unlimited amount of connections in
+// parallel from the given listener, calling the given handler in a goroutine
+// for each connection.
+func AcceptAndHandleParallel(listener net.Listener, handler ConnHandler) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

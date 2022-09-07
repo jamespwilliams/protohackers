@@ -24,5 +24,5 @@ func main() {
 		return err
 	}
 
-	panic(protohackers.ListenAndAcceptParallel("tcp", ":10000", handler))
+	panic(protohackers.ListenAcceptAndHandleParallel("tcp", ":10000", handler))
 }
