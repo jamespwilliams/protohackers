@@ -9,46 +9,23 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
-	"io"
-	"io/ioutil"
 	"math/big"
-	"net"
 
 	"github.com/jamespwilliams/protohackers"
 )
 
 func main() {
-	panic(protohackers.ListenAcceptAndHandleParallel(
+	panic(protohackers.ListenAcceptAndHandleParallelStateful(
 		"tcp",
 		":10000",
-		func(conn net.Conn) error {
-			prices := make(map[int32]int32)
-
-			for {
-				req, err := ioutil.ReadAll(io.LimitReader(conn, 9))
-				if err != nil {
-					return fmt.Errorf("reading bytes returned an error: %w", err)
-				}
-
-				handlerResult, err := handler(req, prices)
-				if err != nil {
-					return fmt.Errorf("handler returned error: %w", err)
-				}
-
-				if handlerResult == nil {
-					continue
-				}
-
-				if _, err := conn.Write(*handlerResult); err != nil {
-					return fmt.Errorf("failed to write handler result to connection: %w", err)
-				}
-			}
+		func() map[int32]int32 {
+			return make(map[int32]int32)
 		},
+		protohackers.NBytesConnHandlerStateful(9, handler),
 	))
 }
 
-func handler(bytes []byte, prices map[int32]int32) (*[]byte, error) {
+func handler(prices map[int32]int32, bytes []byte) (*[]byte, error) {
 	if len(bytes) < 9 {
 		return nil, nil
 	}
