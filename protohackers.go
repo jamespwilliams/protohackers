@@ -11,22 +11,52 @@ import (
 
 type ConnHandler func(net.Conn) error
 
-// ListenAcceptAndHandleParallel is a utility wrapper around
-// AcceptAndHandleParallel which calls net.Listen to get the net.Listener
+type ConnHandlerStateful[State any] func(State, net.Conn) error
+
+// makeConnHandlerStateful takes a ConnHandler and makes it a ConnHandlerStateful trivially,
+// by adding an empty state to it.
+func makeConnHandlerStateful(handler ConnHandler) ConnHandlerStateful[struct{}] {
+	return func(_ struct{}, conn net.Conn) error {
+		return handler(conn)
+	}
+}
+
+func removeConnHandlerStatefulState(handler ConnHandlerStateful[struct{}]) ConnHandler {
+	return func(conn net.Conn) error {
+		return handler(struct{}{}, conn)
+	}
+}
+
+// ListenAcceptAndHandleParallel listens on the given network and address,
+// accepts an unlimited amount of connections in parallel from the given
+// listener, calling the given handler in a goroutine for each connection.
 func ListenAcceptAndHandleParallel(network, address string, handler ConnHandler) error {
+	return ListenAcceptAndHandleParallelStateful(
+		network,
+		address,
+		func() struct{} {
+			return struct{}{}
+		},
+		makeConnHandlerStateful(handler),
+	)
+}
+
+// ListenAcceptAndHandleParallelStateful is like ListenAcceptAndHandleParallel,
+// but allows the caller to handle per-connection state of type State.
+func ListenAcceptAndHandleParallelStateful[State any](network, address string, initialState func() State, handler ConnHandlerStateful[State]) error {
 	listener, err := net.Listen(network, address)
 	if err != nil {
 		return fmt.Errorf("protohackers: failed to listen on network %s and address %s: %w",
 			network, address, err)
 	}
 
-	return AcceptAndHandleParallel(listener, handler)
+	return acceptAndHandleParallel(listener, initialState, handler)
 }
 
-// AcceptAndHandleParallel accepts an unlimited amount of connections in
+// acceptAndHandleParallel accepts an unlimited amount of connections in
 // parallel from the given listener, calling the given handler in a goroutine
-// for each connection.
-func AcceptAndHandleParallel(listener net.Listener, handler ConnHandler) error {
+// for each connection. State can be maintained per connection.
+func acceptAndHandleParallel[State any](listener net.Listener, initialState func() State, handler ConnHandlerStateful[State]) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -34,7 +64,8 @@ func AcceptAndHandleParallel(listener net.Listener, handler ConnHandler) error {
 		}
 
 		go func() {
-			if err := handler(conn); err != nil {
+			state := initialState()
+			if err := handler(state, conn); err != nil {
 				fmt.Fprintf(os.Stderr, "WARN: connection handler returned an error: %v\n", err)
 			}
 		}()
@@ -42,6 +73,15 @@ func AcceptAndHandleParallel(listener net.Listener, handler ConnHandler) error {
 }
 
 type BytesHandler func(request []byte) (response *[]byte, err error)
+type BytesHandlerStateful[State any] func(state State, request []byte) (response *[]byte, err error)
+
+// addEmptyStateBytesHandler takes a BytesHandler and makes it a BytesHandlerStateful trivially,
+// by adding an empty state to it.
+func addEmptyStateBytesHandler(handler BytesHandler) BytesHandlerStateful[struct{}] {
+	return func(_ struct{}, request []byte) (response *[]byte, err error) {
+		return handler(request)
+	}
+}
 
 // SplitFuncConnHandler returns a connection handler that will continually:
 //
@@ -51,10 +91,21 @@ type BytesHandler func(request []byte) (response *[]byte, err error)
 //     followed by responseDelimiter
 //
 func SplitFuncConnHandler(inputSplitter bufio.SplitFunc, responseDelimiter []byte, handler BytesHandler) ConnHandler {
-	return func(conn net.Conn) error {
+	return removeConnHandlerStatefulState(SplitFuncConnHandlerStateful(inputSplitter, responseDelimiter, addEmptyStateBytesHandler(handler)))
+}
+
+// SplitFuncConnHandler returns a connection handler that will continually:
+//
+//   - read a sequence of bytes, delimited as defined by the given [bufio.SplitFunc]
+//   - call the given handler function with those bytes
+//   - if the handler function returns a non-nil pointer to a byte slice, write it to the connection,
+//     followed by responseDelimiter
+//
+func SplitFuncConnHandlerStateful[State any](inputSplitter bufio.SplitFunc, responseDelimiter []byte, handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
+	return func(state State, conn net.Conn) error {
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
-			handlerResult, err := handler(scanner.Bytes())
+			handlerResult, err := handler(state, scanner.Bytes())
 			if err != nil {
 				return fmt.Errorf("protohackers: splitFuncConnHandler: handler returned an error: %w", err)
 			}
@@ -89,7 +140,12 @@ func SplitFuncConnHandler(inputSplitter bufio.SplitFunc, responseDelimiter []byt
 //
 // Lines passed to the handler do not contain newlines.
 func LineConnHandler(handler BytesHandler) ConnHandler {
-	return SplitFuncConnHandler(bufio.ScanLines, []byte("\n"), handler)
+	return removeConnHandlerStatefulState(LineConnHandlerStateful(addEmptyStateBytesHandler(handler)))
+}
+
+// LineConnHandlerStateful is a stateful version of LineConnHandler
+func LineConnHandlerStateful[State any](handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
+	return SplitFuncConnHandlerStateful(bufio.ScanLines, []byte("\n"), handler)
 }
 
 // WordConnHandler returns a connection handler that will continually:
@@ -101,7 +157,12 @@ func LineConnHandler(handler BytesHandler) ConnHandler {
 //
 // Lines passed to the handler do not contain spaces.
 func WordConnHandler(handler BytesHandler) ConnHandler {
-	return SplitFuncConnHandler(bufio.ScanWords, []byte(" "), handler)
+	return removeConnHandlerStatefulState(WordConnHandlerStateful(addEmptyStateBytesHandler(handler)))
+}
+
+// WordConnHandlerStateful is a stateful version of WordConnHandler
+func WordConnHandlerStateful[State any](handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
+	return SplitFuncConnHandlerStateful(bufio.ScanWords, []byte(" "), handler)
 }
 
 // ByteConnHandler returns a connection handler that will continually:
@@ -110,5 +171,10 @@ func WordConnHandler(handler BytesHandler) ConnHandler {
 //   - call the given handler function with that byte
 //   - if the handler function returns a non-nil pointer to a byte slice, write it to the connection
 func ByteConnHandler(handler BytesHandler) ConnHandler {
-	return SplitFuncConnHandler(bufio.ScanBytes, []byte(""), handler)
+	return removeConnHandlerStatefulState(WordConnHandlerStateful(addEmptyStateBytesHandler(handler)))
+}
+
+// ByteConnHandlerStateful is a stateful version of ByteWordConnHandler
+func ByteConnHandlerStateful[State any](handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
+	return SplitFuncConnHandlerStateful(bufio.ScanBytes, []byte(""), handler)
 }
