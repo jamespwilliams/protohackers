@@ -5,6 +5,7 @@ package protohackers
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -177,4 +178,38 @@ func ByteConnHandler(handler BytesHandler) ConnHandler {
 // ByteConnHandlerStateful is a stateful version of ByteWordConnHandler
 func ByteConnHandlerStateful[State any](handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
 	return SplitFuncConnHandlerStateful(bufio.ScanBytes, []byte(""), handler)
+}
+
+// NBytesConnHandler returns a connection handler that will continually:
+//
+//   - read at most n bytes
+//   - call the given handler function with those bytes
+//   - if the handler function returns a non-nil pointer to a byte slice, write it to the connection
+func NBytesConnHandler(n int64, handler BytesHandler) ConnHandler {
+	return removeConnHandlerStatefulState(NBytesConnHandlerStateful(n, addEmptyStateBytesHandler(handler)))
+}
+
+// NBytesConnHandlerStateful is a stateful version of NBytesConnHandler
+func NBytesConnHandlerStateful[State any](n int64, handler BytesHandlerStateful[State]) ConnHandlerStateful[State] {
+	return func(state State, conn net.Conn) error {
+		for {
+			req, err := io.ReadAll(io.LimitReader(conn, n))
+			if err != nil {
+				return fmt.Errorf("protohackers: nbytesconnhandler: reading bytes failed: %w", err)
+			}
+
+			handlerResult, err := handler(state, req)
+			if err != nil {
+				return fmt.Errorf("protohackers: nbytesconnhandler: handler returned an error: %w", err)
+			}
+
+			if handlerResult == nil {
+				continue
+			}
+
+			if _, err := conn.Write(*handlerResult); err != nil {
+				return fmt.Errorf("protohackers: nbytesconnhandler: failed to write handler result to connection: %w", err)
+			}
+		}
+	}
 }
